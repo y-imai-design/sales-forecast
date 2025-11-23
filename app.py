@@ -8,9 +8,8 @@ import holidays
 # ページ設定
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
-st.title('🍜 飲食店向け AI売上予測')
-st.markdown("過去データを元に、**指定した期間の売上**を予測します。")
-st.markdown("⚡ **0円の日は自動で削除。時短営業やイベント**による売上の増減（掛け率）を手動で設定可能")
+st.title('🍜 飲食店向け AI売上予測 (人時売上高・シフト計算機能付き)')
+st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -87,19 +86,26 @@ if uploaded_file is not None:
                     default=[]
                 )
                 
-                # (B) 詳細設定（臨時休業＆掛け率）
+                # (B) 詳細設定
                 st.sidebar.caption("臨時休業・営業時間変更")
-                st.sidebar.info("""
-                **書き方のルール**
-                * 休業日: `2025/12/31` (日付のみ)
-                * 調整日: `2025/01/01, 0.5` (日付, 倍率)
-                ※ 0.5は半分、1.2は1.2倍の意味です
-                """)
+                st.sidebar.info("例: `2025/12/31` (休み), `2026/01/01, 0.5` (売上半分)")
                 
                 special_settings_text = st.sidebar.text_area(
                     "日付設定入力欄",
-                    height=150,
-                    placeholder="2025/12/31\n2026/01/01, 0.5\n2026/01/02, 1.2"
+                    height=100,
+                    placeholder="2025/12/31\n2026/01/01, 0.5"
+                )
+
+                # --- 4. 目標設定（人時売上高） ---
+                st.sidebar.header("4. 目標設定")
+                st.sidebar.markdown("目標とする **人時売上高** を入力してください。")
+                
+                target_productivity = st.sidebar.number_input(
+                    "目標人時売上高 (円/時間)",
+                    min_value=1000,
+                    value=5000,
+                    step=100,
+                    help="従業員1人が1時間に稼ぐ売上の目標値です。一般的に4000円〜6000円程度が目安です。"
                 )
 
                 # --- エラーチェックと実行 ---
@@ -108,7 +114,7 @@ if uploaded_file is not None:
                 elif target_start > target_end:
                     st.error("⚠️ 終了日は、開始日よりあとの日付にしてください。")
                 else:
-                    st.success(f"**{target_start.strftime('%m/%d')} 〜 {target_end.strftime('%m/%d')}** の売上を予測します...")
+                    st.success(f"**{target_start.strftime('%m/%d')} 〜 {target_end.strftime('%m/%d')}** の売上と労働時間を予測します...")
                     
                     with st.spinner('AIが計算中...'):
                         m = Prophet()
@@ -123,17 +129,11 @@ if uploaded_file is not None:
                     target_mask = (forecast['ds'] >= target_start) & (forecast['ds'] <= target_end)
                     future_forecast = forecast.loc[target_mask].copy()
 
-                    # --- ★ここで休業・調整を適用する処理 ---
-                    
-                    # 1. 曜日変換用マップ
-                    weekday_map = {
-                        "月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6
-                    }
+                    # --- 休業・調整を適用 ---
+                    weekday_map = {"月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6}
                     target_weekdays = [weekday_map[day] for day in closed_days]
                     
-                    # 2. テキストエリアの解析（日付と倍率を取り出す）
-                    special_adjustments = {} # 日付: 倍率 の辞書
-                    
+                    special_adjustments = {}
                     if special_settings_text:
                         for line in special_settings_text.split('\n'):
                             line = line.strip()
@@ -142,99 +142,113 @@ if uploaded_file is not None:
                                 try:
                                     dt_str = parts[0].strip()
                                     dt_obj = pd.to_datetime(dt_str).date()
-                                    
-                                    if len(parts) > 1:
-                                        # カンマがあれば倍率指定とみなす
-                                        ratio = float(parts[1].strip())
-                                        special_adjustments[dt_obj] = ratio
-                                    else:
-                                        # カンマがなければ休業(0倍)とみなす
-                                        special_adjustments[dt_obj] = 0.0
+                                    ratio = float(parts[1].strip()) if len(parts) > 1 else 0.0
+                                    special_adjustments[dt_obj] = ratio
                                 except:
-                                    pass # 読み取れない行は無視
+                                    pass
 
-                    # 3. 適用関数
                     def apply_adjustments(row):
                         current_date = row['ds'].date()
-                        
-                        # (A) 個別設定（テキストエリア）を最優先
                         if current_date in special_adjustments:
-                            ratio = special_adjustments[current_date]
-                            return row['yhat'] * ratio
-                        
-                        # (B) 毎週の定休日
+                            return row['yhat'] * special_adjustments[current_date]
                         if row['ds'].weekday() in target_weekdays:
                             return 0
-                        
-                        # (C) 通常通り
                         return row['yhat']
 
-                    # 適用実行
                     future_forecast['yhat'] = future_forecast.apply(apply_adjustments, axis=1)
                     
-                    # 0円にした日は、予測の幅（最小・最大）も0にする
-                    # 倍率をかけた日は、幅も倍率をかける
-                    def apply_adjustments_bounds(row, col_name):
-                        current_date = row['ds'].date()
-                        if current_date in special_adjustments:
-                            return row[col_name] * special_adjustments[current_date]
-                        if row['ds'].weekday() in target_weekdays:
-                            return 0
-                        return row[col_name]
-
-                    future_forecast['yhat_lower'] = future_forecast.apply(lambda r: apply_adjustments_bounds(r, 'yhat_lower'), axis=1)
-                    future_forecast['yhat_upper'] = future_forecast.apply(lambda r: apply_adjustments_bounds(r, 'yhat_upper'), axis=1)
+                    # 予測の幅も調整
+                    def apply_bounds(row, col):
+                        d = row['ds'].date()
+                        if d in special_adjustments: return row[col] * special_adjustments[d]
+                        if row['ds'].weekday() in target_weekdays: return 0
+                        return row[col]
+                    future_forecast['yhat_lower'] = future_forecast.apply(lambda r: apply_bounds(r, 'yhat_lower'), axis=1)
+                    future_forecast['yhat_upper'] = future_forecast.apply(lambda r: apply_bounds(r, 'yhat_upper'), axis=1)
 
                     if len(future_forecast) == 0:
                         st.error("予測データの取得に失敗しました。")
                     else:
+                        # --- ★人時売上高に基づく労働時間の計算 ---
+                        future_forecast['target_hours'] = future_forecast['yhat'] / target_productivity
+                        
                         # --- 表示エリア ---
                         st.markdown(f"### 🎯 {target_start.strftime('%Y/%m/%d')} 〜 {target_end.strftime('%m/%d')} の予測結果")
                         
+                        # 合計計算
                         total_sales = future_forecast['yhat'].sum()
-                        st.markdown(f"## 💰 期間合計予測: <span style='color:#FF4B4B'>{int(total_sales):,} 円</span>", unsafe_allow_html=True)
+                        total_hours = future_forecast['target_hours'].sum()
+                        
+                        # 指標の表示
+                        col_m1, col_m2, col_m3 = st.columns(3)
+                        with col_m1:
+                            st.metric("💰 期間予測売上", f"{int(total_sales):,} 円")
+                        with col_m2:
+                            st.metric("⏱️ 目標総労働時間", f"{int(total_hours):,} 時間", help="この期間で使えるスタッフの総時間枠です")
+                        with col_m3:
+                            st.metric("📊 設定した人時売上高", f"{int(target_productivity):,} 円/h")
+
                         st.markdown("---")
 
-                        col1, col2 = st.columns([1, 2])
+                        col1, col2 = st.columns([1.2, 2])
 
                         with col1:
-                            st.subheader("📅 日別の予測表 (円)")
-                            display_df = future_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
-                            display_df.columns = ['日付', '予測売上', '最低予測', '最大予測']
+                            st.subheader("📅 日別の目標労働時間")
+                            
+                            # 表示用データ作成
+                            display_df = future_forecast[['ds', 'yhat', 'target_hours']].copy()
+                            display_df.columns = ['日付', '予測売上(円)', '目標労働時間(h)']
+                            
                             display_df['曜日'] = display_df['日付'].dt.strftime('%a')
-                            display_df = display_df[['日付', '曜日', '予測売上', '最低予測', '最大予測']]
                             display_df['日付'] = display_df['日付'].dt.date
-                            display_df = display_df.round(0)
                             
-                            st.dataframe(display_df, height=500)
+                            # 丸め処理
+                            display_df['予測売上(円)'] = display_df['予測売上(円)'].round(0).astype(int)
+                            display_df['目標労働時間(h)'] = display_df['目標労働時間(h)'].round(1) # 小数点1位まで
                             
+                            # 列の並び替え
+                            display_df = display_df[['日付', '曜日', '予測売上(円)', '目標労働時間(h)']]
+                            
+                            # 表の表示
+                            st.dataframe(
+                                display_df.style.format({
+                                    '予測売上(円)': '{:,}',
+                                    '目標労働時間(h)': '{:.1f}'
+                                }), 
+                                height=500
+                            )
+                            
+                            # CSVダウンロード
                             csv_data = display_df.to_csv(index=False).encode('utf-8')
-                            csv_name = f"sales_{target_start.strftime('%Y%m%d')}_{target_end.strftime('%m%d')}.csv"
-                            st.download_button("📥 CSVダウンロード", csv_data, csv_name, "text/csv")
+                            csv_name = f"shift_plan_{target_start.strftime('%Y%m%d')}.csv"
+                            st.download_button("📥 シフト作成用CSVをDL", csv_data, csv_name, "text/csv")
 
                         with col2:
-                            st.subheader("📈 売上推移グラフ (万円)")
+                            st.subheader("📈 売上と労働時間の推移")
                             
+                            # グラフ用データ
                             chart_df = future_forecast[['ds', 'yhat']].copy()
                             chart_df['売上(万円)'] = chart_df['yhat'] / 10000
                             
+                            # 休日フラグ
                             jp_holidays = holidays.Japan()
-                            chart_df['is_holiday'] = chart_df['ds'].apply(
-                                lambda x: x.weekday() >= 5 or x in jp_holidays
-                            )
+                            chart_df['is_holiday'] = chart_df['ds'].apply(lambda x: x.weekday() >= 5 or x in jp_holidays)
                             
+                            # 売上グラフ
                             line = alt.Chart(chart_df).mark_line(point=True, color='#2563EB').encode(
                                 x=alt.X('ds', title='日付', axis=alt.Axis(format='%m/%d')),
                                 y=alt.Y('売上(万円)', title='売上 (万円)'),
                                 tooltip=[alt.Tooltip('ds', title='日付', format='%Y/%m/%d'), alt.Tooltip('売上(万円)', format='.1f')]
                             )
                             
-                            holidays_chart = alt.Chart(chart_df).transform_filter(
-                                alt.datum.is_holiday == True
-                            ).mark_rule(color='red', opacity=0.1, strokeWidth=15).encode(x='ds')
+                            # 休日背景
+                            holidays_chart = alt.Chart(chart_df).transform_filter(alt.datum.is_holiday == True).mark_rule(
+                                color='red', opacity=0.1, strokeWidth=15
+                            ).encode(x='ds')
 
                             st.altair_chart((holidays_chart + line).interactive(), use_container_width=True)
-                            st.caption("🟥 赤い縦帯がついている日は「土日」または「祝日」です。")
+                            
+                            st.info(f"💡 目標人時売上高 **{int(target_productivity):,}円** を達成するには、表の「目標労働時間」以内にシフトを収めてください。")
 
         else:
             st.error("CSVの列が足りません。")
