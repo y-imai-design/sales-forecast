@@ -8,7 +8,7 @@ import holidays # 祝日判定用（Prophetと一緒に入っています）
 # ページ設定
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
-st.title('🍜 飲食店向け AI売上予測 (祝日色付け機能付き)')
+st.title('🍜 飲食店向け AI売上予測 (祝日色付)')
 st.markdown("過去データを元に、**指定した月の売上**を予測します。")
 st.markdown("🎌 **土日と祝日**には、グラフに赤い縦線が入ります。")
 
@@ -17,8 +17,8 @@ st.sidebar.header("1. データ入力")
 st.sidebar.info("""
 **【CSVデータの注意点】**
 * **1列目**: 日付 (`2025/10/31` 形式推奨)
-* **2列目**: 売上 (数値のみ)
-* **備考**: データ期間の自動削除制限はありません
+* **2列目**: 売上 (数値のみ　,や￥をいれない)
+* **備考**: 貸切や営業変更などで外れ値があると予測しずらいので、理想はその日は消す。データとしては、2年以上が推奨
 """)
 
 uploaded_file = st.sidebar.file_uploader("CSVファイルをアップロード", type="csv")
@@ -157,4 +157,5 @@ if uploaded_file is not None:
             st.error("CSVの列が足りません。")
 
     except Exception as e:
+
         st.error(f"エラー: {e}")
