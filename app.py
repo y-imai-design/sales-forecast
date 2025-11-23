@@ -8,9 +8,9 @@ import holidays
 # ページ設定
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
-st.title('🍜 飲食店向け AI売上予測 ')
+st.title('🍜 飲食店向け AI売上予測')
 st.markdown("過去データを元に、**指定した期間の売上**を予測します。")
-st.markdown("⚡ **0円の日は自動で除外。時短営業やイベント**による売上の増減（掛け率）を手動で設定可能")
+st.markdown("⚡ **0円の日は自動で削除。時短営業やイベント**による売上の増減（掛け率）を手動で設定可能")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -241,14 +241,3 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"エラー: {e}")
-```
-
-### 使い方のコツ
-
-サイドバーの入力欄に、以下のように入力してください。
-
-**例：年末年始の営業調整**
-```text
-2025/12/31, 0.5
-2026/01/01
-2026/01/02, 1.2
