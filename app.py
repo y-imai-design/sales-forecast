@@ -8,8 +8,8 @@ import holidays
 # ページ設定
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
-st.title('🍜 飲食店向け AI売上予測 (人時売上高・シフト計算機能付き)')
-st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。")
+st.title('🍜 飲食店向け AI売上予測 ')
+st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。※0円の日は計算含めず")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -17,7 +17,7 @@ st.sidebar.info("""
 **【CSVデータの注意点】**
 * **1列目**: 日付 (`2025/10/31` 形式推奨)
 * **2列目**: 売上 (数値のみ)
-* **備考**: データは2年以上推奨。また、貸切や営業変更はCSVから削除すると精度向上
+* **備考**: データは2年以上推奨。また、貸切や営業変更、台風などの外れ値はCSVから削除すると精度向上
 """)
 
 uploaded_file = st.sidebar.file_uploader("CSVファイルをアップロード", type="csv")
@@ -259,3 +259,4 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"エラー: {e}")
+
