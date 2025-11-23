@@ -9,7 +9,7 @@ import holidays
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
 st.title('🍜 飲食店向け AI売上予測')
-st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。")
+st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。※0円の日は自動で削除")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -255,4 +255,5 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"エラー: {e}")
+
 
