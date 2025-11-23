@@ -8,8 +8,8 @@ import holidays
 # ページ設定
 st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
-st.title('🍜 飲食店向け AI売上予測')
-st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。※0円の日は自動で削除")
+st.title('🍜 飲食店向け AI売上予測 (人時売上高・シフト計算機能付き)')
+st.markdown("過去データを元に、指定した期間の売上と、**目標人時売上高に基づく適正労働時間**を算出します。")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -157,7 +157,7 @@ if uploaded_file is not None:
 
                     future_forecast['yhat'] = future_forecast.apply(apply_adjustments, axis=1)
                     
-                    # 予測の幅も調整
+                    # 予測の幅（最小・最大）も調整
                     def apply_bounds(row, col):
                         d = row['ds'].date()
                         if d in special_adjustments: return row[col] * special_adjustments[d]
@@ -169,7 +169,7 @@ if uploaded_file is not None:
                     if len(future_forecast) == 0:
                         st.error("予測データの取得に失敗しました。")
                     else:
-                        # --- ★人時売上高に基づく労働時間の計算 ---
+                        # --- ★人時売上高に基づく労働時間の計算（予測売上のみ使用） ---
                         future_forecast['target_hours'] = future_forecast['yhat'] / target_productivity
                         
                         # --- 表示エリア ---
@@ -190,29 +190,33 @@ if uploaded_file is not None:
 
                         st.markdown("---")
 
-                        col1, col2 = st.columns([1.2, 2])
+                        col1, col2 = st.columns([1.5, 2]) # 表を少し広げました
 
                         with col1:
-                            st.subheader("📅 日別の目標労働時間")
+                            st.subheader("📅 日別の予測・目標管理表")
                             
-                            # 表示用データ作成
-                            display_df = future_forecast[['ds', 'yhat', 'target_hours']].copy()
-                            display_df.columns = ['日付', '予測売上(円)', '目標労働時間(h)']
+                            # 表示用データ作成（ここに最低・最大を復活させました）
+                            display_df = future_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper', 'target_hours']].copy()
+                            display_df.columns = ['日付', '予測売上(円)', '最低予測(円)', '最大予測(円)', '目標労働時間(h)']
                             
                             display_df['曜日'] = display_df['日付'].dt.strftime('%a')
                             display_df['日付'] = display_df['日付'].dt.date
                             
                             # 丸め処理
                             display_df['予測売上(円)'] = display_df['予測売上(円)'].round(0).astype(int)
-                            display_df['目標労働時間(h)'] = display_df['目標労働時間(h)'].round(1) # 小数点1位まで
+                            display_df['最低予測(円)'] = display_df['最低予測(円)'].round(0).astype(int)
+                            display_df['最大予測(円)'] = display_df['最大予測(円)'].round(0).astype(int)
+                            display_df['目標労働時間(h)'] = display_df['目標労働時間(h)'].round(1)
                             
                             # 列の並び替え
-                            display_df = display_df[['日付', '曜日', '予測売上(円)', '目標労働時間(h)']]
+                            display_df = display_df[['日付', '曜日', '予測売上(円)', '最低予測(円)', '最大予測(円)', '目標労働時間(h)']]
                             
                             # 表の表示
                             st.dataframe(
                                 display_df.style.format({
                                     '予測売上(円)': '{:,}',
+                                    '最低予測(円)': '{:,}',
+                                    '最大予測(円)': '{:,}',
                                     '目標労働時間(h)': '{:.1f}'
                                 }), 
                                 height=500
@@ -255,5 +259,3 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"エラー: {e}")
-
-
