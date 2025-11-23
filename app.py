@@ -10,7 +10,7 @@ st.set_page_config(page_title="飲食店AI売上予測", layout="wide")
 
 st.title('🍜 飲食店向け AI売上予測 ')
 st.markdown("過去データを元に、**指定した期間の売上**を予測します。")
-st.markdown("🗑️ **過去の売上0円の日**は、自動的に学習データから除外されます（定休日対策）。")
+st.markdown("⚡ **0円の日は自動で除外。時短営業やイベント**による売上の増減（掛け率）を手動で設定可能")
 
 # --- サイドバー ---
 st.sidebar.header("1. データ入力")
@@ -18,7 +18,7 @@ st.sidebar.info("""
 **【CSVデータの注意点】**
 * **1列目**: 日付 (`2025/10/31` 形式推奨)
 * **2列目**: 売上 (数値のみ)
-* **備考**: 2年以上のデータ推奨。貸切や営業短縮は外れ値として除外したほうが精度は高くなる。
+* **備考**: データは2年以上推奨。また、貸切や営業変更はCSVから削除すると精度向上
 """)
 
 uploaded_file = st.sidebar.file_uploader("CSVファイルをアップロード", type="csv")
@@ -44,11 +44,10 @@ if uploaded_file is not None:
             df.columns = ['ds', 'y']
             df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
             
-            # 1. 日付エラー削除
+            # 日付エラー削除
             df = df.dropna(subset=['ds'])
             
-            # ★ 2. 売上が0円以下の行を削除（ここが新機能！）
-            # これにより、過去の定休日が「売上減」として学習されるのを防ぎます
+            # 売上が0円以下の行を削除（定休日対策）
             original_len = len(df)
             df = df[df['y'] > 0]
             deleted_count = original_len - len(df)
@@ -77,23 +76,30 @@ if uploaded_file is not None:
                 target_start = pd.to_datetime(target_start_date)
                 target_end = pd.to_datetime(target_end_date)
 
-                # --- 3. 休業日の設定 ---
-                st.sidebar.header("3. 未来の休業日設定")
+                # --- 3. 休業日・調整日の設定 ---
+                st.sidebar.header("3. 休業・営業時間の設定")
                 
                 # (A) 毎週の定休日
                 weekdays_jp = ["月", "火", "水", "木", "金", "土", "日"]
                 closed_days = st.sidebar.multiselect(
-                    "毎週の定休日を選んでください",
+                    "毎週の定休日 (売上0円)",
                     options=weekdays_jp,
                     default=[]
                 )
                 
-                # (B) 臨時休業日
-                st.sidebar.caption("臨時休業日（例: 2025/12/31）")
-                special_holidays_text = st.sidebar.text_area(
-                    "日付を入力（複数ある場合は改行）",
-                    height=100,
-                    placeholder="2025/12/31\n2026/01/01"
+                # (B) 詳細設定（臨時休業＆掛け率）
+                st.sidebar.caption("臨時休業・営業時間変更")
+                st.sidebar.info("""
+                **書き方のルール**
+                * 休業日: `2025/12/31` (日付のみ)
+                * 調整日: `2025/01/01, 0.5` (日付, 倍率)
+                ※ 0.5は半分、1.2は1.2倍の意味です
+                """)
+                
+                special_settings_text = st.sidebar.text_area(
+                    "日付設定入力欄",
+                    height=150,
+                    placeholder="2025/12/31\n2026/01/01, 0.5\n2026/01/02, 1.2"
                 )
 
                 # --- エラーチェックと実行 ---
@@ -117,33 +123,67 @@ if uploaded_file is not None:
                     target_mask = (forecast['ds'] >= target_start) & (forecast['ds'] <= target_end)
                     future_forecast = forecast.loc[target_mask].copy()
 
-                    # --- 休業日を0円にする処理 ---
+                    # --- ★ここで休業・調整を適用する処理 ---
+                    
+                    # 1. 曜日変換用マップ
                     weekday_map = {
                         "月": 0, "火": 1, "水": 2, "木": 3, "金": 4, "土": 5, "日": 6
                     }
                     target_weekdays = [weekday_map[day] for day in closed_days]
                     
-                    special_holidays_list = []
-                    if special_holidays_text:
-                        for line in special_holidays_text.split('\n'):
+                    # 2. テキストエリアの解析（日付と倍率を取り出す）
+                    special_adjustments = {} # 日付: 倍率 の辞書
+                    
+                    if special_settings_text:
+                        for line in special_settings_text.split('\n'):
                             line = line.strip()
                             if line:
+                                parts = line.split(',')
                                 try:
-                                    dt = pd.to_datetime(line)
-                                    special_holidays_list.append(dt)
+                                    dt_str = parts[0].strip()
+                                    dt_obj = pd.to_datetime(dt_str).date()
+                                    
+                                    if len(parts) > 1:
+                                        # カンマがあれば倍率指定とみなす
+                                        ratio = float(parts[1].strip())
+                                        special_adjustments[dt_obj] = ratio
+                                    else:
+                                        # カンマがなければ休業(0倍)とみなす
+                                        special_adjustments[dt_obj] = 0.0
                                 except:
-                                    pass
+                                    pass # 読み取れない行は無視
 
-                    def apply_holidays(row):
+                    # 3. 適用関数
+                    def apply_adjustments(row):
+                        current_date = row['ds'].date()
+                        
+                        # (A) 個別設定（テキストエリア）を最優先
+                        if current_date in special_adjustments:
+                            ratio = special_adjustments[current_date]
+                            return row['yhat'] * ratio
+                        
+                        # (B) 毎週の定休日
                         if row['ds'].weekday() in target_weekdays:
                             return 0
-                        for holiday in special_holidays_list:
-                            if row['ds'].date() == holiday.date():
-                                return 0
+                        
+                        # (C) 通常通り
                         return row['yhat']
 
-                    future_forecast['yhat'] = future_forecast.apply(apply_holidays, axis=1)
-                    future_forecast.loc[future_forecast['yhat'] == 0, ['yhat_lower', 'yhat_upper']] = 0
+                    # 適用実行
+                    future_forecast['yhat'] = future_forecast.apply(apply_adjustments, axis=1)
+                    
+                    # 0円にした日は、予測の幅（最小・最大）も0にする
+                    # 倍率をかけた日は、幅も倍率をかける
+                    def apply_adjustments_bounds(row, col_name):
+                        current_date = row['ds'].date()
+                        if current_date in special_adjustments:
+                            return row[col_name] * special_adjustments[current_date]
+                        if row['ds'].weekday() in target_weekdays:
+                            return 0
+                        return row[col_name]
+
+                    future_forecast['yhat_lower'] = future_forecast.apply(lambda r: apply_adjustments_bounds(r, 'yhat_lower'), axis=1)
+                    future_forecast['yhat_upper'] = future_forecast.apply(lambda r: apply_adjustments_bounds(r, 'yhat_upper'), axis=1)
 
                     if len(future_forecast) == 0:
                         st.error("予測データの取得に失敗しました。")
@@ -201,3 +241,14 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"エラー: {e}")
+```
+
+### 使い方のコツ
+
+サイドバーの入力欄に、以下のように入力してください。
+
+**例：年末年始の営業調整**
+```text
+2025/12/31, 0.5
+2026/01/01
+2026/01/02, 1.2
